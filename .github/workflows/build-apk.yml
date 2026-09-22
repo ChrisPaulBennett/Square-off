@@ -95,12 +95,20 @@ jobs:
         if: failure()
         run: |
           echo "===================== KEY ERROR LINES ====================="
-          # Surface the actual python-for-android failure, which normally scrolls
-          # far above buildozer's generic 'Command failed' tail.
-          grep -n -iE "error:|Traceback|Exception|No recipe|Didn.t find|not found|failed to|CompileError|Could not" build.log \
+          grep -n -iE "error:|Traceback|Exception|No recipe|Didn.t find|not found|failed to|CompileError|Could not|STDOUT:|STDERR:" build.log \
             | tail -n 60 || true
-          echo "===================== LAST 120 LINES ======================"
-          tail -n 120 build.log || true
+          echo "================ ERROR REGION (before failure) ============"
+          # The real python-for-android error sits just above buildozer's
+          # generic 'Command failed:' env-var dump. Print the 300 lines leading
+          # up to that marker so the actual cause is visible (the env dump is
+          # noise and is intentionally skipped).
+          MARK=$(grep -n -m1 "Command failed:" build.log | cut -d: -f1)
+          if [ -n "$MARK" ]; then
+            START=$((MARK-300)); [ "$START" -lt 1 ] && START=1
+            sed -n "${START},${MARK}p" build.log
+          else
+            tail -n 200 build.log
+          fi
 
       - name: Upload full build log (on failure)
         if: failure()
