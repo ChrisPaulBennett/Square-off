@@ -1,0 +1,96 @@
+name: Build Android APK
+
+# Build the APK on every push/PR that touches the app, on demand, and on tags.
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to attach the APK to a Release on tag builds
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git zip unzip openjdk-17-jdk autoconf libtool pkg-config \
+            zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev \
+            libssl-dev build-essential ccache libltdl-dev
+
+      - name: Install Buildozer + Cython
+        run: |
+          python -m pip install --upgrade pip
+          pip install "buildozer==1.5.0" "cython<3.0" bleak
+
+      - name: Prepare bleak Android recipe
+        run: |
+          # bleak ships a python-for-android recipe (compiles its Java into the
+          # APK). Copy it into ./p4a-recipes and enable it in buildozer.spec.
+          RECIPE_SRC="$(python -c 'import bleak, os; print(os.path.join(os.path.dirname(bleak.__file__), "backends", "p4android", "recipes"))')"
+          echo "bleak recipe source: $RECIPE_SRC"
+          mkdir -p p4a-recipes
+          cp -r "$RECIPE_SRC/bleak" p4a-recipes/
+          if grep -q '^# *p4a.local_recipes' buildozer.spec; then
+            sed -i 's|^# *p4a.local_recipes.*|p4a.local_recipes = ./p4a-recipes|' buildozer.spec
+          fi
+          grep -n 'p4a.local_recipes' buildozer.spec || true
+
+      - name: Cache Buildozer global dir (SDK/NDK, downloads)
+        uses: actions/cache@v4
+        with:
+          path: ~/.buildozer
+          key: buildozer-global-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            buildozer-global-${{ runner.os }}-
+
+      - name: Cache project .buildozer
+        uses: actions/cache@v4
+        with:
+          path: .buildozer
+          key: buildozer-local-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            buildozer-local-${{ runner.os }}-
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
+      - name: Build debug APK
+        run: buildozer android debug
+
+      - name: Locate built APK
+        id: apk
+        run: |
+          APK="$(ls -1 bin/*.apk | head -n 1)"
+          echo "path=$APK" >> "$GITHUB_OUTPUT"
+          echo "Built: $APK"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: squareoff-apk
+          path: bin/*.apk
+          if-no-files-found: error
+
+      - name: Attach APK to Release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: bin/*.apk
+

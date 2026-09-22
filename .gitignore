@@ -1,0 +1,24 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+
+# --- Buildozer / python-for-android build artifacts ---
+.buildozer/
+bin/
+p4a-recipes/
+
+# --- Redundant source archive ---
+Square-off.zip
+
+# --- OS / editor junk ---
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+

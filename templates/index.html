@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Square Off · Play a Bot</title>
+
+<link rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/chessboard-1.0.0.min.css"
+      crossorigin="anonymous" referrerpolicy="no-referrer" />
+
+<style>
+  :root { --bg:#1f2430; --panel:#2b313f; --accent:#7aa2f7; --ok:#9ece6a; --warn:#e0af68; --err:#f7768e; --text:#c0caf5; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:14px 22px; background:var(--panel); font-size:20px; font-weight:600; border-bottom:1px solid #00000040; }
+  header small { font-weight:400; color:#8b95b5; }
+  .wrap { display:flex; flex-wrap:wrap; gap:22px; padding:22px; }
+  #board { width:520px; max-width:92vw; }
+  .panel { background:var(--panel); border-radius:12px; padding:16px 18px; width:360px; max-width:92vw; }
+  .panel h3 { margin:0 0 10px; font-size:14px; text-transform:uppercase; letter-spacing:.05em; color:#8b95b5; }
+  .row { display:flex; gap:8px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
+  label { font-size:13px; color:#9aa5c4; min-width:56px; }
+  select, input, button { font:inherit; padding:8px 10px; border-radius:8px; border:1px solid #00000030;
+                          background:#1a1f2b; color:var(--text); }
+  button { background:var(--accent); color:#0b1020; border:none; font-weight:600; cursor:pointer; }
+  button.secondary { background:#39415a; color:var(--text); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .pill { padding:3px 9px; border-radius:999px; font-size:12px; font-weight:600; }
+  .pill.on { background:var(--ok); color:#0b1020; }
+  .pill.off { background:#39415a; color:#9aa5c4; }
+  .status-line { font-size:13px; margin:6px 0; }
+  #log { background:#151a24; border-radius:8px; padding:10px; height:190px; overflow:auto; font-size:13px; line-height:1.5; }
+  #log div:last-child { color:#fff; }
+  .muted { color:#8b95b5; font-size:12px; }
+  .turn-badge { font-weight:600; }
+  .err { color:var(--err); }
+</style>
+</head>
+<body>
+<header>♟ Square Off — Play a Bot <small>&nbsp;board plays the bot's side, you play over the board</small></header>
+
+<div class="wrap">
+  <div>
+    <div id="board"></div>
+    <p class="muted" style="width:520px;max-width:92vw">
+      Make <b>your</b> move on the physical board (or drag on-screen). The bot's reply
+      is played automatically by the motor. Opponent runs locally — see the note below.
+    </p>
+  </div>
+
+  <div class="panel">
+    <h3>Board connection</h3>
+    <div class="row">
+      <span>Status:</span> <span id="connPill" class="pill off">disconnected</span>
+      <span id="engineTag" class="muted"></span>
+    </div>
+    <div class="row">
+      <button id="scanBtn" class="secondary">Scan</button>
+      <select id="deviceSel" style="flex:1"><option value="">— devices —</option></select>
+    </div>
+    <div class="row">
+      <button id="connectBtn">Connect</button>
+      <button id="disconnectBtn" class="secondary">Disconnect</button>
+    </div>
+
+    <h3 style="margin-top:18px">New game</h3>
+    <div class="row">
+      <label>Play as</label>
+      <select id="colorSel"><option value="white">White</option><option value="black">Black</option></select>
+    </div>
+    <div class="row">
+      <label>Opponent</label>
+      <select id="modeSel">
+        <option value="local">Local engine</option>
+        <option value="lichess">Lichess AI (online)</option>
+      </select>
+    </div>
+    <div class="row" id="localRow">
+      <label>Bot</label>
+      <select id="levelSel"></select>
+    </div>
+    <div id="lichessRows" style="display:none">
+      <div class="row">
+        <label>Token</label>
+        <input id="tokenInput" type="password" placeholder="Lichess API token (board:play)" style="flex:1" />
+      </div>
+      <div class="row">
+        <label>AI level</label>
+        <select id="lichessLevelSel">
+          <option>1</option><option>2</option><option>3</option><option selected>4</option>
+          <option>5</option><option>6</option><option>7</option><option>8</option>
+        </select>
+        <a href="https://lichess.org/account/oauth/token/create?scopes[]=board:play&description=SquareOff"
+           target="_blank" class="muted">get a token ↗</a>
+      </div>
+    </div>
+    <div class="row">
+      <button id="newGameBtn">Start new game</button>
+      <button id="resetBtn" class="secondary" title="Physically re-home all pieces">Reset board</button>
+      <button id="flipBtn" class="secondary" title="Rotate 180° — swap which end is white/black">⇅ Swap sides</button>
+    </div>
+
+    <h3 style="margin-top:18px">Daily puzzle</h3>
+    <div class="row">
+      <button id="puzzleBtn" class="secondary">Load chess.com daily puzzle</button>
+    </div>
+    <div id="puzzleInfo" class="muted" style="display:none">
+      <div><a id="puzzleLink" href="#" target="_blank"></a> <span id="puzzleProg"></span></div>
+      <img id="puzzleImg" src="" alt="" style="margin-top:6px;max-width:160px;border-radius:8px" />
+    </div>
+    <p class="muted">Tip: press <b>Reset board</b> first so the full set is in the
+      start position, then load the puzzle. Wrong moves make the board beep and
+      slide the piece back.</p>
+
+    <h3 style="margin-top:18px">Game</h3>
+    <div class="status-line">Turn: <span id="turnBadge" class="turn-badge">—</span>
+        <span id="checkTag" class="err"></span></div>
+    <div class="row">
+      <input id="moveInput" placeholder="move e2e4 / Nf3" style="flex:1" />
+      <button id="moveBtn" class="secondary">Send</button>
+    </div>
+    <div id="log"></div>
+    <p class="muted" style="margin-top:12px">
+      ⚠ chess.com has no public API to play its bots, so the opponent is a local
+      engine (Stockfish if installed, otherwise a built-in fallback).
+    </p>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.5.1/jquery.min.js"
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/chessboard-1.0.0.min.js"
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+<script>
+const game = new Chess();
+let boardUi = null;
+let human_color = 'white';
+let your_turn = false;
+
+function api(path, body) {
+  return fetch(path, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(body || {})
+  }).then(r => r.json());
+}
+
+function pieceTheme(piece) {
+  return 'https://chessboardjs.com/img/chesspieces/wikipedia/' + piece + '.png';
+}
+
+function onDragStart(source, piece) {
+  if (!your_turn) return false;
+  // only allow moving your own colour
+  if (human_color === 'white' && piece.search(/^b/) !== -1) return false;
+  if (human_color === 'black' && piece.search(/^w/) !== -1) return false;
+  return true;
+}
+
+function onDrop(source, target) {
+  const mv = {from: source, to: target, promotion: 'q'};
+  const legal = game.move(mv);           // local validation mirror
+  if (legal === null) return 'snapback';
+  game.undo();                            // let the server be source of truth
+  let uci = source + target;
+  if (legal.promotion) uci += legal.promotion;
+  your_turn = false;
+  api('/api/move', {move: uci}).then(applyState);
+}
+
+function applyState(st) {
+  if (!st) return;
+  if (st.error) log('⚠ ' + st.error, true);
+  human_color = st.human_color || 'white';
+  your_turn = !!st.your_turn && !st.busy;
+
+  if (st.fen) { game.load(st.fen); boardUi.position(st.fen); }
+  boardUi.orientation(human_color);
+
+  $('#connPill').attr('class', 'pill ' + (st.connected ? 'on' : 'off'))
+                .text(st.connected ? ('connected' + (st.address ? ' · ' + st.address : '')) : 'disconnected');
+  $('#engineTag').text(st.engine ? ('engine: ' + st.engine) : '');
+  $('#flipBtn').css('background', st.flipped ? 'var(--warn)' : '')
+               .css('color', st.flipped ? '#0b1020' : '')
+               .text(st.flipped ? '⇅ Sides swapped' : '⇅ Swap sides');
+  $('#turnBadge').text(st.active ? (st.turn + (your_turn ? ' (you)' : ' (bot)')) : '—');
+  $('#checkTag').text(st.in_check ? 'CHECK' : '');
+
+  if (st.levels && $('#levelSel option').length === 0) {
+    st.levels.forEach(l => $('#levelSel').append(`<option value="${l}">${l}</option>`));
+    $('#levelSel').val('easy');
+  }
+
+  if (st.puzzle) {
+    $('#puzzleInfo').show();
+    $('#puzzleLink').attr('href', st.puzzle.url || '#').text(st.puzzle.title || 'Daily puzzle');
+    $('#puzzleProg').text(st.puzzle_progress ? ('· ' + st.puzzle_progress) : '');
+    if (st.puzzle.image) $('#puzzleImg').attr('src', st.puzzle.image).show(); else $('#puzzleImg').hide();
+  } else {
+    $('#puzzleInfo').hide();
+  }
+  renderLog(st.messages);
+}
+
+let lastLog = '';
+function renderLog(messages) {
+  if (!messages) return;
+  const joined = messages.join('\n');
+  if (joined === lastLog) return;
+  lastLog = joined;
+  const el = $('#log').empty();
+  messages.forEach(m => el.append($('<div>').text(m)));
+  el.scrollTop(el[0].scrollHeight);
+}
+function log(msg) { $('#log').append($('<div>').text(msg)); }
+
+// --- controls ---
+$('#scanBtn').on('click', function() {
+  const btn = $(this).prop('disabled', true).text('Scanning…');
+  api('/api/scan').then(r => {
+    const sel = $('#deviceSel').empty().append('<option value="">— devices —</option>');
+    (r.devices || []).forEach(d => sel.append(
+      `<option value="${d.address}">${d.is_board ? '♟ ' : ''}${d.name} (${d.address})</option>`));
+    if (r.error) log('⚠ scan: ' + r.error);
+  }).finally(() => btn.prop('disabled', false).text('Scan'));
+});
+
+$('#connectBtn').on('click', function() {
+  const addr = $('#deviceSel').val();
+  if (!addr) { log('Pick a device to connect.'); return; }
+  const btn = $(this).prop('disabled', true).text('Connecting…');
+  api('/api/connect', {address: addr}).then(applyState)
+      .finally(() => btn.prop('disabled', false).text('Connect'));
+});
+
+$('#disconnectBtn').on('click', () => api('/api/disconnect').then(applyState));
+
+$('#modeSel').on('change', function() {
+  const lichess = $(this).val() === 'lichess';
+  $('#lichessRows').toggle(lichess);
+  $('#localRow').toggle(!lichess);
+});
+
+$('#newGameBtn').on('click', function() {
+  const btn = $(this).prop('disabled', true).text('Starting…');
+  api('/api/newgame', {
+    color: $('#colorSel').val(),
+    level: $('#levelSel').val(),
+    mode: $('#modeSel').val(),
+    lichess_token: $('#tokenInput').val().trim(),
+    lichess_level: parseInt($('#lichessLevelSel').val(), 10),
+  }).then(applyState).finally(() => btn.prop('disabled', false).text('Start new game'));
+});
+
+$('#resetBtn').on('click', function() {
+  if (!confirm('Physically re-home all pieces to the starting position?')) return;
+  const btn = $(this).prop('disabled', true).text('Resetting…');
+  api('/api/reset').then(applyState).finally(() => btn.prop('disabled', false).text('Reset board'));
+});
+
+$('#puzzleBtn').on('click', function() {
+  const btn = $(this).prop('disabled', true).text('Loading…');
+  api('/api/puzzle').then(applyState)
+      .finally(() => btn.prop('disabled', false).text('Load chess.com daily puzzle'));
+});
+
+$('#flipBtn').on('click', () => api('/api/flip').then(applyState));
+
+function sendTyped() {
+  const v = $('#moveInput').val().trim();
+  if (!v) return;
+  $('#moveInput').val('');
+  your_turn = false;
+  api('/api/move', {move: v}).then(applyState);
+}
+$('#moveBtn').on('click', sendTyped);
+$('#moveInput').on('keydown', e => { if (e.key === 'Enter') sendTyped(); });
+
+// --- init ---
+$(function() {
+  boardUi = Chessboard('board', {
+    draggable: true,
+    pieceTheme: pieceTheme,
+    position: 'start',
+    onDragStart: onDragStart,
+    onDrop: onDrop,
+  });
+  fetch('/api/state').then(r => r.json()).then(applyState);
+  setInterval(() => fetch('/api/state').then(r => r.json()).then(applyState), 1500);
+});
+</script>
+</body>
+</html>
+
+
+
+

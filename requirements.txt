@@ -1,0 +1,5 @@
+bleak>=0.21.0
+python-chess>=1.11
+flask>=3.0
+requests>=2.33.0
+
