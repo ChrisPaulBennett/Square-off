@@ -329,6 +329,17 @@ class SquareOff:
         self._last_occupancy = None
         # Graveyard slots that are already occupied (by rank index 0..7).
         self._parked_slots = set()
+        # Move-completion handshake. The board notifies 'OK' on the STATUS
+        # characteristic once a motion path has physically finished. We wait for
+        # that ack before sending the next path, otherwise consecutive commands
+        # (e.g. park-then-attacker on a capture, or a whole puzzle/reset
+        # sequence) get written back-to-back and the board runs them into each
+        # other (knocking pieces over / only playing the last move).
+        # Created lazily in connect() so it binds to the BLE event loop.
+        self._move_ack = None
+        # Max seconds to wait for a single move's 'OK' before giving up and
+        # moving on (a physical move only takes a few seconds).
+        self.ack_timeout = 20.0
         # Optional hooks so a UI/game layer can receive board events.
         #   status_callback(text)      -> 'OK', 'e2u', 'e4d', ...
         #   occupancy_callback(str64)  -> 64-char occupancy string (on change)
@@ -374,6 +385,8 @@ class SquareOff:
 
     async def connect(self):
         print(f"[*] Connecting to {self.address} ...")
+        # Created here so the Event binds to the BLE loop this coroutine runs on.
+        self._move_ack = asyncio.Event()
         await self.client.connect()
         print("[+] Connected. Subscribing to notifications ...")
         # Old NUS text channel (battery, some acks).
@@ -445,6 +458,9 @@ class SquareOff:
             text = self._flip_square_name(text[:-1]) + text[-1]
         if text == "OK":
             print("[board] move OK")
+            # Release anyone waiting in send_path() for this move to finish.
+            if self._move_ack is not None:
+                self._move_ack.set()
         elif len(text) >= 3 and text[-1] in "ud":
             square, action = text[:-1], text[-1]
             verb = {"u": "lifted", "d": "placed"}[action]
@@ -509,13 +525,29 @@ class SquareOff:
         await self._write_once(CONFIG_CHAR_UUID, b"0")
         await self.state("R:ISG")
 
-    async def send_path(self, path: bytes, settle: bool = True):
+    async def send_path(self, path: bytes, settle: bool = True, wait: bool = True):
         """Write a raw motion path (e.g. b'4,6:4,5|') and let the motor run.
 
         Sent as a single write - see _write_once for why chunking breaks this.
+
+        When `wait` is True (the default) we block until the board notifies 'OK'
+        on the STATUS characteristic, i.e. until the piece has physically
+        finished moving. This is essential when several paths are sent in a row:
+          * a capture parks the victim and THEN slides the attacker in - without
+            waiting, the attacker path is written mid-park and shoves the victim;
+          * puzzle setup / board reset send many moves - without waiting they all
+            arrive at once and the board only runs the last one.
         """
+        # Arm the ack before writing so we can't miss an 'OK' that races in.
+        if wait and self._move_ack is not None:
+            self._move_ack.clear()
         await self._write_once(MOVE_CHAR_UUID, path)
         print(f"[app  ] path -> {path.decode('ascii')}")
+        if wait and self._move_ack is not None:
+            try:
+                await asyncio.wait_for(self._move_ack.wait(), timeout=self.ack_timeout)
+            except asyncio.TimeoutError:
+                print("[!] timed out waiting for move 'OK'; continuing anyway")
         if settle:
             # The app sends 'S:po' after each move to settle the board state.
             await self.state("S:po")

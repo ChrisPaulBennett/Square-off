@@ -133,21 +133,23 @@ class BoardController:
         for a in actions:
             kind = a[0]
             if kind == "move":
-                self.run(self.board.move(a[1], a[2]))
+                self.run(self.board.move(a[1], a[2]), timeout=120)
             elif kind == "route":
-                self.run(self.board.route_move(a[1], a[2]))
+                self.run(self.board.route_move(a[1], a[2]), timeout=120)
             elif kind == "capture":
                 slot = a[3] if len(a) > 3 else None
-                self.run(self.board.capture(a[1], a[2], slot))
+                # A capture runs two motions (park victim, then attacker), so it
+                # needs extra time now that each waits for the board's 'OK'.
+                self.run(self.board.capture(a[1], a[2], slot), timeout=120)
             elif kind == "park":
                 slot = a[2] if len(a) > 2 else None
-                self.run(self.board.park_piece(a[1], slot))
+                self.run(self.board.park_piece(a[1], slot), timeout=120)
             elif kind == "retrieve":
-                self.run(self.board.retrieve_piece(a[1], a[2]))
+                self.run(self.board.retrieve_piece(a[1], a[2]), timeout=120)
             elif kind == "beep":
                 self.run(self.board.beep(), timeout=15)
             elif kind == "path":
-                self.run(self.board.send_path(a[1]))
+                self.run(self.board.send_path(a[1]), timeout=120)
             elif kind == "note":
                 notes.append(a[1])
         return notes
