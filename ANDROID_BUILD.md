@@ -77,8 +77,11 @@ The first run downloads the Android SDK/NDK and compiles everything — it can
 take 20–40+ minutes and a few GB of disk. When it finishes, the APK is in:
 
 ```
-bin/squareoff-1.0-arm64-v8a_armeabi-v7a-debug.apk
+bin/squareoff-1.0-arm64-v8a-debug.apk
 ```
+
+> The app targets **arm64-v8a** (64-bit) devices — that's essentially every
+> Android phone from the last several years.
 
 ## Install on your phone
 

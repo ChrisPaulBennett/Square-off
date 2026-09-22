@@ -53,7 +53,10 @@ android.permissions = INTERNET, BLUETOOTH, BLUETOOTH_ADMIN, BLUETOOTH_SCAN, BLUE
 
 android.api = 34
 android.minapi = 24
-android.archs = arm64-v8a, armeabi-v7a
+# arm64-v8a only: virtually all Android phones since ~2019 are 64-bit, and the
+# 32-bit armeabi-v7a CPython build fails (Bionic lacks setgrent/getgrent for the
+# grp module). Building one arch also halves CI time.
+android.archs = arm64-v8a
 android.allow_backup = 1
 
 # Auto-accept the Android SDK licenses (needed for unattended CI builds so
