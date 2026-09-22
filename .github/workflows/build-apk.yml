@@ -87,7 +87,28 @@ jobs:
           fi
 
       - name: Build debug APK
-        run: buildozer android debug
+        run: |
+          set -o pipefail
+          buildozer android debug 2>&1 | tee build.log
+
+      - name: Show the real error (on failure)
+        if: failure()
+        run: |
+          echo "===================== KEY ERROR LINES ====================="
+          # Surface the actual python-for-android failure, which normally scrolls
+          # far above buildozer's generic 'Command failed' tail.
+          grep -n -iE "error:|Traceback|Exception|No recipe|Didn.t find|not found|failed to|CompileError|Could not" build.log \
+            | tail -n 60 || true
+          echo "===================== LAST 120 LINES ======================"
+          tail -n 120 build.log || true
+
+      - name: Upload full build log (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildozer-log
+          path: build.log
+          if-no-files-found: ignore
 
       - name: Locate built APK
         id: apk

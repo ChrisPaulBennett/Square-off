@@ -23,7 +23,9 @@ version = 1.0
 # chess       -> python-chess game logic
 # flask       -> the existing web UI
 # requests(+deps)/openssl -> chess.com daily-puzzle fetch over HTTPS
-requirements = python3,flask,bleak,pyjnius,android,chess,requests,urllib3,idna,charset-normalizer,certifi,openssl
+#   NB: use chardet (pure-Python) rather than charset-normalizer, whose 3.x
+#   builds a C speedup extension that fails when cross-compiling for Android.
+requirements = python3,flask,bleak,pyjnius,android,chess,requests,urllib3,idna,chardet,certifi,openssl
 
 # --- Bootstrap: run the Flask server, show it in a native WebView ----------
 p4a.bootstrap = webview
