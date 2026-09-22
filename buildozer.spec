@@ -32,6 +32,13 @@ p4a.bootstrap = webview
 # The WebView loads http://127.0.0.1:<port>; keep this in step with main.py.
 p4a.port = 5000
 
+# Pin python-for-android to a stable release. p4a 'master' now targets Python
+# 3.14 with a prebuilt-Android-wheels-only installer, which can't find a wheel
+# for C-extension deps like markupsafe (a Flask/Jinja2 dependency) and whose
+# fresh-built pip is broken. This release uses Python 3.11 and compiles pure-
+# Python modules from source, which handles markupsafe/jinja2/etc. correctly.
+p4a.branch = v2024.01.21
+
 # bleak ships a python-for-android recipe that compiles its Java classes into
 # the APK. Point local_recipes at it (see ANDROID_BUILD.md for how to locate it),
 # then uncomment the line below:
