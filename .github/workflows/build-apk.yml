@@ -69,7 +69,22 @@ jobs:
             buildozer-local-${{ runner.os }}-
 
       - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses >/dev/null 2>&1 || true
+        run: |
+          # Buildozer downloads its OWN SDK to ~/.buildozer, so a system-wide
+          # sdkmanager is no use here. Do a first (best-effort) buildozer run to
+          # fetch the SDK/cmdline-tools, then accept every license against that
+          # SDK's own sdkmanager so build-tools (aidl) can install.
+          export ANDROID_SDK_ROOT="$HOME/.buildozer/android/platform/android-sdk"
+          yes | buildozer android debug || true
+
+          SDKMANAGER="$(ls "$ANDROID_SDK_ROOT"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -n 1 || true)"
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER="$(ls "$ANDROID_SDK_ROOT"/tools/bin/sdkmanager 2>/dev/null | head -n 1 || true)"
+          fi
+          echo "Using sdkmanager: ${SDKMANAGER:-<not found>}"
+          if [ -n "$SDKMANAGER" ]; then
+            yes | "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --licenses || true
+          fi
 
       - name: Build debug APK
         run: buildozer android debug

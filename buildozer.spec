@@ -47,6 +47,10 @@ android.minapi = 24
 android.archs = arm64-v8a, armeabi-v7a
 android.allow_backup = 1
 
+# Auto-accept the Android SDK licenses (needed for unattended CI builds so
+# build-tools / aidl install without an interactive prompt).
+android.accept_sdk_license = True
+
 # Keep the screen awake while a game/motor move is running (optional).
 android.wakelock = 1
 
