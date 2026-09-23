@@ -271,6 +271,28 @@ class GameManager:
             self.opponent.close()
             self.opponent = None
 
+    def _captured_piece(self, move):
+        """The piece a move captures (handles en passant), or None."""
+        if self.board.is_en_passant(move):
+            # The captured pawn is the opponent's; it's not on the to-square.
+            return chess.Piece(chess.PAWN, not self.board.turn)
+        return self.board.piece_at(move.to_square)
+
+    def _record_human_capture(self, move):
+        """Remember where a hand-captured piece was parked, so reset can fetch it.
+
+        We assume the human drops the piece on the bank to their right, filling
+        the next free spot (pawns low-to-high) - see Graveyard.alloc_human. Call
+        this BEFORE pushing `move` (the victim must still be on the board).
+        """
+        victim = self._captured_piece(move)
+        if not victim:
+            return
+        slot = self.grave.alloc_human(victim)
+        cname = chess.COLOR_NAMES[victim.color]
+        pname = chess.piece_name(victim.piece_type)
+        self._say(f"Captured {cname} {pname} — assumed parked to your right (slot {slot}).")
+
     # --- lifecycle ----------------------------------------------------------
     def new_game(self, human_color="white", level="easy", mode="local",
                  lichess_token=None, lichess_level=4):
@@ -336,6 +358,8 @@ class GameManager:
         if move is None or move not in self.board.legal_moves:
             return self.state(error=f"Illegal move: {text}")
         self._say(f"You: {self.board.san(move)}")
+        if self.board.is_capture(move):
+            self._record_human_capture(move)
         self.board.push(move)
         self.detector.reset()
         if self.board.is_game_over():
@@ -421,6 +445,8 @@ class GameManager:
 
         # Correct (or unchecked): play it.
         self._say(f"✓ You: {self.board.san(move)}")
+        if self.board.is_capture(move):
+            self._record_human_capture(move)
         self.board.push(move)
         self.solution_idx += 1
         self.detector.reset()

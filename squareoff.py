@@ -380,19 +380,21 @@ class SquareOff:
         # Graveyard slots that are already occupied (by rank index 0..7).
         self._parked_slots = set()
         # Move-completion handshake. The board notifies 'OK' on the STATUS
-        # characteristic, but on this firmware 'OK' is a *receipt* ack that comes
-        # back almost immediately - NOT a "the motor has finished" signal. So we
-        # also enforce a physical settle delay proportional to how far the magnet
-        # has to travel, otherwise consecutive commands (park-then-attacker on a
-        # capture, or a whole puzzle/reset sequence) are written while the motor
-        # is still moving and pieces get shoved / only the last move plays.
+        # characteristic when a motion path has PHYSICALLY finished (confirmed
+        # from logs: 'OK' arrives 4-12s after the path is written, right before
+        # the occupancy grid updates). So we wait for 'OK' before sending the
+        # next command - that's what stops a capture's attacker from ploughing
+        # into the victim and stops puzzle/reset sequences arriving all at once.
         # Created lazily in connect() so it binds to the BLE event loop.
         self._move_ack = None
-        # Max seconds to wait for a single move's 'OK' before giving up.
-        self.ack_timeout = 20.0
-        # Physical pacing (tunable). Total settle time for a path is
-        #   move_settle_time + path_length_in_squares * move_time_per_unit
-        # and we never send the next command until at least that long has passed.
+        # Max seconds to wait for a move's 'OK' before assuming it was missed
+        # (worst case seen on hardware was ~12.5s, so 30s is a safe ceiling).
+        self.ack_timeout = 30.0
+        # Small pause after 'OK' so the magnet fully releases / the piece settles
+        # before the next command (occupancy settles ~0.1s after 'OK').
+        self.post_move_settle = 0.4
+        # Fallback pacing used ONLY if an 'OK' never arrives: estimated travel
+        # time = move_settle_time + path_length_in_squares * move_time_per_unit.
         self.move_time_per_unit = 0.9   # seconds of travel per board square
         self.move_settle_time = 1.5     # fixed per-move overhead (lift/place)
         # Optional hooks so a UI/game layer can receive board events.
@@ -600,9 +602,11 @@ class SquareOff:
           * puzzle setup / board reset send many moves - without waiting they all
             arrive at once and the board only runs the last one.
 
-        The board's 'OK' status is only a *receipt* ack (it fires almost
-        immediately), so we use it as a lower bound but always hold on for a
-        physical settle delay proportional to the distance the magnet travels.
+        The board notifies 'OK' on the STATUS characteristic when the motor has
+        physically finished (verified from logs: 'OK' lands 4-12s after the path,
+        just before the occupancy updates). We wait for that 'OK', then pause a
+        beat for the piece to settle. If no 'OK' arrives we fall back to a
+        distance-based time estimate so moves are still paced.
         """
         loop = asyncio.get_event_loop()
         start = loop.time()
@@ -612,23 +616,28 @@ class SquareOff:
         await self._write_once(MOVE_CHAR_UUID, path)
         print(f"[app  ] path -> {path.decode('ascii')}")
         if settle:
-            # The app sends 'S:po' after each move to settle the board state.
+            # The board wants 'S:po' right after the path (this is what makes the
+            # move register); it then reports 'OK' when the motion completes.
             await self.state("S:po")
         if wait:
-            # Consume the (fast) receipt ack if the board sends one...
+            got_ack = False
             if self._move_ack is not None:
                 try:
                     await asyncio.wait_for(self._move_ack.wait(), timeout=self.ack_timeout)
-                    ble_log.info("    (ack received after %.3fs)", loop.time() - start)
+                    got_ack = True
+                    ble_log.info("    (motor OK after %.3fs)", loop.time() - start)
                 except asyncio.TimeoutError:
-                    ble_log.info("    (no ack within %.1fs)", self.ack_timeout)
-            # ...then make sure the motor has really had time to finish before we
-            # let the caller fire the next command.
-            remaining = self._estimate_move_time(path) - (loop.time() - start)
-            if remaining > 0:
-                await asyncio.sleep(remaining)
-            ble_log.info("    (settle done, total %.3fs, est %.3fs)",
-                         loop.time() - start, self._estimate_move_time(path))
+                    ble_log.info("    (no OK within %.1fs; using time estimate)",
+                                 self.ack_timeout)
+            if got_ack:
+                # 'OK' == motor finished; brief settle so the magnet releases.
+                await asyncio.sleep(self.post_move_settle)
+            else:
+                # No completion signal: pace by estimated travel time instead.
+                remaining = self._estimate_move_time(path) - (loop.time() - start)
+                if remaining > 0:
+                    await asyncio.sleep(remaining)
+            ble_log.info("    (move done, total %.3fs)", loop.time() - start)
 
     @staticmethod
     def _path_length(path: bytes) -> float:
