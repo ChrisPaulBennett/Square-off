@@ -57,6 +57,8 @@ Usage:
 
 import argparse
 import asyncio
+import logging
+import os
 import sys
 
 try:
@@ -66,6 +68,43 @@ except ImportError:  # pragma: no cover
         "The 'bleak' package is required. Install it with:\n"
         "    pip install bleak"
     )
+
+# --- BLE transmission logging ---------------------------------------------------
+# Every byte we send to the board and every notification we receive is written to
+# a log file with millisecond timestamps. This lets us line up a move command
+# with whatever the board sends back afterwards, so we can find a "motor done"
+# signal (e.g. a second 'OK', an occupancy change, or a piece up/down event).
+#
+# Set the file with the SQUAREOFF_LOG env var; defaults to 'squareoff_ble.log'
+# in the current directory.
+BLE_LOG_PATH = os.environ.get("SQUAREOFF_LOG", "squareoff_ble.log")
+
+ble_log = logging.getLogger("squareoff.ble")
+if not ble_log.handlers:
+    ble_log.setLevel(logging.DEBUG)
+    _handler = logging.FileHandler(BLE_LOG_PATH)
+    _handler.setFormatter(
+        logging.Formatter("%(asctime)s.%(msecs)03d  %(message)s",
+                          datefmt="%H:%M:%S")
+    )
+    ble_log.addHandler(_handler)
+    ble_log.propagate = False
+
+# Friendly names for the characteristics, used in the log lines.
+_CHAR_NAMES = {}
+
+
+def _log_ble(direction: str, uuid: str, data) -> None:
+    """Record one BLE transmission (TX=app->board, RX=board->app) to the log."""
+    try:
+        if isinstance(data, (bytes, bytearray)):
+            text = bytes(data).decode("ascii", errors="replace")
+        else:
+            text = str(data)
+    except Exception:  # noqa: BLE001 - logging must never crash the app
+        text = repr(data)
+    name = _CHAR_NAMES.get(uuid, uuid[:8])
+    ble_log.info("%-3s %-8s %r", direction, name, text)
 
 # --- Nordic UART Service (NUS) UUIDs -------------------------------------------------
 NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
@@ -91,6 +130,17 @@ STATUS_CHAR_UUID = "4496994f-2600-4e7e-81d5-e0f7b67ebd48"
 OCC_CHAR_UUID = "777ac5a4-6fa8-474b-841d-091bd57d28c4"
 
 DEVICE_NAME = "Square Off"
+
+# Fill in the friendly names now that the UUIDs are defined (used by _log_ble).
+_CHAR_NAMES.update({
+    NUS_TX_CHAR_UUID: "NUS_TX",
+    NUS_RX_CHAR_UUID: "NUS_RX",
+    MOVE_CHAR_UUID: "MOVE",
+    STATE_CHAR_UUID: "STATE",
+    CONFIG_CHAR_UUID: "CONFIG",
+    STATUS_CHAR_UUID: "STATUS",
+    OCC_CHAR_UUID: "OCC",
+})
 
 # Some NUS implementations cannot receive more than 20 bytes per write, so we chunk.
 MAX_WRITE_CHUNK = 20
@@ -330,16 +380,21 @@ class SquareOff:
         # Graveyard slots that are already occupied (by rank index 0..7).
         self._parked_slots = set()
         # Move-completion handshake. The board notifies 'OK' on the STATUS
-        # characteristic once a motion path has physically finished. We wait for
-        # that ack before sending the next path, otherwise consecutive commands
-        # (e.g. park-then-attacker on a capture, or a whole puzzle/reset
-        # sequence) get written back-to-back and the board runs them into each
-        # other (knocking pieces over / only playing the last move).
+        # characteristic, but on this firmware 'OK' is a *receipt* ack that comes
+        # back almost immediately - NOT a "the motor has finished" signal. So we
+        # also enforce a physical settle delay proportional to how far the magnet
+        # has to travel, otherwise consecutive commands (park-then-attacker on a
+        # capture, or a whole puzzle/reset sequence) are written while the motor
+        # is still moving and pieces get shoved / only the last move plays.
         # Created lazily in connect() so it binds to the BLE event loop.
         self._move_ack = None
-        # Max seconds to wait for a single move's 'OK' before giving up and
-        # moving on (a physical move only takes a few seconds).
+        # Max seconds to wait for a single move's 'OK' before giving up.
         self.ack_timeout = 20.0
+        # Physical pacing (tunable). Total settle time for a path is
+        #   move_settle_time + path_length_in_squares * move_time_per_unit
+        # and we never send the next command until at least that long has passed.
+        self.move_time_per_unit = 0.9   # seconds of travel per board square
+        self.move_settle_time = 1.5     # fixed per-move overhead (lift/place)
         # Optional hooks so a UI/game layer can receive board events.
         #   status_callback(text)      -> 'OK', 'e2u', 'e4d', ...
         #   occupancy_callback(str64)  -> 64-char occupancy string (on change)
@@ -385,6 +440,8 @@ class SquareOff:
 
     async def connect(self):
         print(f"[*] Connecting to {self.address} ...")
+        print(f"[*] Logging BLE traffic to {os.path.abspath(BLE_LOG_PATH)}")
+        ble_log.info("======== connecting to %s ========", self.address)
         # Created here so the Event binds to the BLE loop this coroutine runs on.
         self._move_ack = asyncio.Event()
         await self.client.connect()
@@ -419,6 +476,7 @@ class SquareOff:
     # --- Incoming data -------------------------------------------------------------
     def _handle_notification(self, _sender, data: bytearray):
         """Accumulate bytes and dispatch complete '<id>#<data>*' messages."""
+        _log_ble("RX", NUS_TX_CHAR_UUID, data)
         self._rx_buffer += data.decode("ascii", errors="replace")
         while "*" in self._rx_buffer:
             message, self._rx_buffer = self._rx_buffer.split("*", 1)
@@ -449,6 +507,7 @@ class SquareOff:
 
     def _handle_status(self, _sender, data: bytearray):
         """SWAP status channel: 'OK' after a move, 'e2u'/'e4d' piece up/down."""
+        _log_ble("RX", STATUS_CHAR_UUID, data)
         text = data.decode("ascii", errors="replace").strip()
         if not text:
             return
@@ -479,7 +538,8 @@ class SquareOff:
         text = self._flip_occupancy(text)   # into the logical (flipped) view
         if len(text) == 64 and text != self._last_occupancy:
             self._last_occupancy = text
-            # Streamed very frequently; only print when it changes.
+            # Streamed very frequently; only log/print when it changes.
+            _log_ble("RX", OCC_CHAR_UUID, text)
             print(f"[board] occupancy changed:\n{parse_occupancy(text)}")
             if self.occupancy_callback:
                 try:
@@ -490,6 +550,7 @@ class SquareOff:
     # --- Outgoing commands ---------------------------------------------------------
     async def _write(self, uuid, payload: bytes, response: bool = True):
         """Write raw bytes to a characteristic, chunked for compatibility."""
+        _log_ble("TX", uuid, payload)
         for i in range(0, len(payload), MAX_WRITE_CHUNK):
             chunk = payload[i:i + MAX_WRITE_CHUNK]
             await self.client.write_gatt_char(uuid, chunk, response=response)
@@ -503,6 +564,7 @@ class SquareOff:
         malformed command and drop the BLE connection. The board negotiates a
         517-byte MTU, so the whole command fits in one write.
         """
+        _log_ble("TX", uuid, payload)
         await self.client.write_gatt_char(uuid, payload, response=response)
 
     async def send(self, command_id: int, data: str = ""):
@@ -530,27 +592,66 @@ class SquareOff:
 
         Sent as a single write - see _write_once for why chunking breaks this.
 
-        When `wait` is True (the default) we block until the board notifies 'OK'
-        on the STATUS characteristic, i.e. until the piece has physically
-        finished moving. This is essential when several paths are sent in a row:
+        When `wait` is True (the default) we do NOT return until the piece has
+        physically finished moving, so a following command can't collide with it.
+        This is essential when several paths are sent in a row:
           * a capture parks the victim and THEN slides the attacker in - without
             waiting, the attacker path is written mid-park and shoves the victim;
           * puzzle setup / board reset send many moves - without waiting they all
             arrive at once and the board only runs the last one.
+
+        The board's 'OK' status is only a *receipt* ack (it fires almost
+        immediately), so we use it as a lower bound but always hold on for a
+        physical settle delay proportional to the distance the magnet travels.
         """
+        loop = asyncio.get_event_loop()
+        start = loop.time()
         # Arm the ack before writing so we can't miss an 'OK' that races in.
         if wait and self._move_ack is not None:
             self._move_ack.clear()
         await self._write_once(MOVE_CHAR_UUID, path)
         print(f"[app  ] path -> {path.decode('ascii')}")
-        if wait and self._move_ack is not None:
-            try:
-                await asyncio.wait_for(self._move_ack.wait(), timeout=self.ack_timeout)
-            except asyncio.TimeoutError:
-                print("[!] timed out waiting for move 'OK'; continuing anyway")
         if settle:
             # The app sends 'S:po' after each move to settle the board state.
             await self.state("S:po")
+        if wait:
+            # Consume the (fast) receipt ack if the board sends one...
+            if self._move_ack is not None:
+                try:
+                    await asyncio.wait_for(self._move_ack.wait(), timeout=self.ack_timeout)
+                    ble_log.info("    (ack received after %.3fs)", loop.time() - start)
+                except asyncio.TimeoutError:
+                    ble_log.info("    (no ack within %.1fs)", self.ack_timeout)
+            # ...then make sure the motor has really had time to finish before we
+            # let the caller fire the next command.
+            remaining = self._estimate_move_time(path) - (loop.time() - start)
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+            ble_log.info("    (settle done, total %.3fs, est %.3fs)",
+                         loop.time() - start, self._estimate_move_time(path))
+
+    @staticmethod
+    def _path_length(path: bytes) -> float:
+        """Total travel distance (in board squares) of a 'x,y:x,y:...|' path."""
+        body = path.decode("ascii", errors="replace").strip().rstrip("|")
+        pts = []
+        for tok in body.split(":"):
+            tok = tok.strip()
+            if not tok:
+                continue
+            xs, _, ys = tok.partition(",")
+            try:
+                pts.append((float(xs), float(ys)))
+            except ValueError:
+                continue
+        total = 0.0
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+            total += ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
+        return total
+
+    def _estimate_move_time(self, path: bytes) -> float:
+        """How long to wait for `path` to physically complete, in seconds."""
+        return self.move_settle_time + self._path_length(path) * self.move_time_per_unit
 
     async def move(self, frm: str, to: str):
         """Physically move a piece from one square to another (simple moves).
@@ -558,6 +659,7 @@ class SquareOff:
         For captures use `capture()`; for castling send the two `path` segments
         yourself (move the king, then the rook).
         """
+        ble_log.info("=== MOVE %s->%s ===", frm, to)
         path = build_path(self._orient(plan_move(frm, to)))
         print(f"[app  ] move {frm}{to}")
         await self.send_path(path)
@@ -609,6 +711,7 @@ class SquareOff:
         self._parked_slots.add(slot)
         park_path = build_path(self._orient(plan_park(to, slot)))
         move_path = build_path(self._orient(plan_move(frm, to)))
+        ble_log.info("=== CAPTURE %sx%s (park victim -> slot %s) ===", frm, to, slot)
         print(f"[app  ] capture {frm}x{to} (park victim in slot {slot})")
         # 1) carry the captured piece off the board...
         await self.send_path(park_path, settle=False)
