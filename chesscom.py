@@ -20,6 +20,7 @@ import chess.pgn
 import requests
 
 PUZZLE_URL = "https://api.chess.com/pub/puzzle"
+RANDOM_PUZZLE_URL = "https://api.chess.com/pub/puzzle/random"
 # chess.com blocks requests without a User-Agent.
 HEADERS = {"User-Agent": "SquareOff-Pi/1.0 (BLE chessboard controller)"}
 
@@ -27,6 +28,13 @@ HEADERS = {"User-Agent": "SquareOff-Pi/1.0 (BLE chessboard controller)"}
 def fetch_daily_puzzle(timeout: float = 15.0) -> dict:
     """Return the daily puzzle dict from chess.com."""
     r = requests.get(PUZZLE_URL, headers=HEADERS, timeout=timeout)
+    r.raise_for_status()
+    return r.json()
+
+
+def fetch_random_puzzle(timeout: float = 15.0) -> dict:
+    """Return a random puzzle dict from chess.com (same shape as the daily one)."""
+    r = requests.get(RANDOM_PUZZLE_URL, headers=HEADERS, timeout=timeout)
     r.raise_for_status()
     return r.json()
 

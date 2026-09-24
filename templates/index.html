@@ -101,17 +101,19 @@
       <button id="flipBtn" class="secondary" title="Rotate 180° — swap which end is white/black">⇅ Swap sides</button>
     </div>
 
-    <h3 style="margin-top:18px">Daily puzzle</h3>
+    <h3 style="margin-top:18px">Puzzles</h3>
     <div class="row">
-      <button id="puzzleBtn" class="secondary">Load chess.com daily puzzle</button>
+      <button id="puzzleBtn" class="secondary">Load daily puzzle</button>
+      <button id="randomPuzzleBtn" class="secondary">Random puzzle</button>
     </div>
     <div id="puzzleInfo" class="muted" style="display:none">
       <div><a id="puzzleLink" href="#" target="_blank"></a> <span id="puzzleProg"></span></div>
       <img id="puzzleImg" src="" alt="" style="margin-top:6px;max-width:160px;border-radius:8px" />
     </div>
     <p class="muted">Tip: press <b>Reset board</b> first so the full set is in the
-      start position, then load the puzzle. Wrong moves make the board beep and
-      slide the piece back.</p>
+      start position, then load a puzzle. Wrong moves make the board beep and
+      slide the piece back. Solving a <b>daily</b> puzzle re-homes the board;
+      solving a <b>random</b> puzzle loads another automatically.</p>
 
     <h3 style="margin-top:18px">Game</h3>
     <div class="status-line">Turn: <span id="turnBadge" class="turn-badge">—</span>
@@ -264,8 +266,14 @@ $('#resetBtn').on('click', function() {
 
 $('#puzzleBtn').on('click', function() {
   const btn = $(this).prop('disabled', true).text('Loading…');
-  api('/api/puzzle').then(applyState)
-      .finally(() => btn.prop('disabled', false).text('Load chess.com daily puzzle'));
+  api('/api/puzzle', {kind: 'daily'}).then(applyState)
+      .finally(() => btn.prop('disabled', false).text('Load daily puzzle'));
+});
+
+$('#randomPuzzleBtn').on('click', function() {
+  const btn = $(this).prop('disabled', true).text('Loading…');
+  api('/api/puzzle', {kind: 'random'}).then(applyState)
+      .finally(() => btn.prop('disabled', false).text('Random puzzle'));
 });
 
 $('#flipBtn').on('click', () => api('/api/flip').then(applyState));

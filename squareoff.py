@@ -266,42 +266,58 @@ _FALLBACK_SLOTS = [
 ]
 
 
-def _park_transition(sx: float) -> float:
-    """Channel mid-line used to enter/leave a slot column on the correct side."""
-    return 8.5 if sx > 0 else -1.5
+def _channel_gridline(sx: float) -> float:
+    """Half-integer x gridline on the *board side* of slot column `sx`.
+
+    This vertical line sits in the gap beside the target column (right bank:
+    inner x=8 -> 7.5, outer x=9 -> 8.5; left bank: inner x=-1 -> -0.5, outer
+    x=-2 -> -1.5). Travelling along it never crosses a slot centre (those are at
+    integer x), so a piece can move deep into the bank without disturbing pieces
+    already parked in the intervening slots.
+    """
+    return sx - 0.5 if sx > 0 else sx + 0.5
 
 
 def plan_park(square: str, slot):
     """Route the piece on `square` out to graveyard slot `slot` = (sx, sy).
 
-    Hop onto a half-rank gridline, drive to the channel mid-line on the correct
-    side, then into the slot. Matches the shapes verified on hardware.
+    Collision-safe: hop onto a half-rank gridline, drive out to the vertical
+    channel gridline beside the target column, run ALONG that gridline (in the
+    gap between columns, never through a slot centre) to the slot's rank, then
+    turn straight into the slot. This stops a piece parked deep in the bank from
+    ploughing diagonally across - and knocking over - already-parked pieces.
     """
     sx, sy = slot
     fx, fy = square_to_xy(square)
     gy = fy + 0.5 if fy < 7 else fy - 0.5   # a half-rank gridline to travel along
+    gx = _channel_gridline(sx)              # vertical gridline beside the column
     return [
-        (fx, fy),
-        (fx, gy),
-        (_park_transition(sx), gy),
-        (sx, sy),
+        (fx, fy),        # board square centre
+        (fx, gy),        # onto the half-rank gridline
+        (gx, gy),        # out to the channel gridline beside the column
+        (gx, sy),        # ALONG the gridline to the slot's rank (no slots crossed)
+        (sx, sy),        # turn straight into the slot
     ]
 
 
 def plan_retrieve(slot, square: str):
     """Bring a parked piece from graveyard `slot` = (sx, sy) back onto `square`.
 
-    The reverse of plan_park; matches the retrieval seen in the log
-    (`9,4:8.5,4.5:6.5,4.5:...`).
+    The exact reverse of plan_park: leave the slot sideways onto the channel
+    gridline beside its column, run along that gridline to the destination rank,
+    then onto the board. Stays in the inter-column gaps so it never knocks other
+    parked pieces.
     """
     sx, sy = slot
     tx, ty = square_to_xy(square)
     gy = ty + 0.5 if ty < 7 else ty - 0.5
+    gx = _channel_gridline(sx)
     return [
-        (sx, sy),
-        (_park_transition(sx), gy),
-        (tx, gy),
-        (tx, ty),
+        (sx, sy),        # slot
+        (gx, sy),        # sideways onto the channel gridline beside the column
+        (gx, gy),        # ALONG the gridline to the destination half-rank
+        (tx, gy),        # in over the board to the target file
+        (tx, ty),        # onto the target square
     ]
 
 

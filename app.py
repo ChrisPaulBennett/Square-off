@@ -32,7 +32,7 @@ from squareoff import SquareOff
 from bots import Bot, BOT_LEVELS
 from chessmoves import physical_actions, plan_reset, plan_arrange
 from lichess import LichessOpponent, LichessError
-from chesscom import fetch_daily_puzzle, parse_solution
+from chesscom import fetch_daily_puzzle, fetch_random_puzzle, parse_solution
 from graveyard import Graveyard
 
 
@@ -218,6 +218,7 @@ class GameManager:
         self.grave = Graveyard()            # captured pieces -> type/colour slots
         # Puzzle mode
         self.puzzle = None                  # dict: title, url, image, fen
+        self.puzzle_kind = "daily"          # "daily" or "random"
         self.solution = []                  # list[chess.Move]
         self.solution_idx = 0
         # Observers (used by the CLI / other front-ends)
@@ -307,6 +308,7 @@ class GameManager:
             self.grave = Graveyard()
             self.busy = False
             self.puzzle = None
+            self.puzzle_kind = "daily"
             self.solution = []
             self.solution_idx = 0
             if self.ctrl.board is not None:
@@ -370,10 +372,12 @@ class GameManager:
         return self.state()
 
     # --- puzzle mode --------------------------------------------------------
-    def load_puzzle(self):
+    def load_puzzle(self, kind="daily"):
         with self.lock:
+            kind = "random" if kind == "random" else "daily"
+            fetch = fetch_random_puzzle if kind == "random" else fetch_daily_puzzle
             try:
-                data = fetch_daily_puzzle()
+                data = fetch()
             except Exception as exc:  # noqa: BLE001
                 return self.state(error=f"Could not fetch puzzle: {exc}")
             fen = data.get("fen")
@@ -386,6 +390,7 @@ class GameManager:
 
             self._cleanup_opponents()
             self.mode = "puzzle"
+            self.puzzle_kind = kind
             self.puzzle = {
                 "title": data.get("title"),
                 "url": data.get("url"),
@@ -404,7 +409,8 @@ class GameManager:
                 self.ctrl.board._parked_slots = set()
 
             side = "White" if self.human_color == chess.WHITE else "Black"
-            self._say(f"Daily puzzle: {self.puzzle['title']} — {side} to move.")
+            label = "Daily puzzle" if kind == "daily" else "Random puzzle"
+            self._say(f"{label}: {self.puzzle['title']} — {side} to move.")
             # Physically build the position. We assume the board starts from the
             # standard set; the safest workflow is to press Reset first.
             actions, notes = plan_arrange(chess.Board(), self.board, self.grave)
@@ -451,18 +457,33 @@ class GameManager:
         self.solution_idx += 1
         self.detector.reset()
         if self.board.is_game_over() or self.solution_idx >= len(self.solution):
-            self.active = False
-            self._say("Puzzle solved! 🎉")
-            return self.state()
+            return self._on_puzzle_complete()
 
         # Play the opponent's reply from the solution line.
         reply = self.solution[self.solution_idx]
         self._apply_opponent_move(reply)
         self.solution_idx += 1
         if self.solution_idx >= len(self.solution) or self.board.is_game_over():
-            self.active = False
-            self._say("Puzzle solved! 🎉")
+            return self._on_puzzle_complete()
         return self.state()
+
+    def _on_puzzle_complete(self):
+        """Handle a solved puzzle: reset the board (daily) or load another (random).
+
+        Called while holding self.lock (RLock, so reset_board/load_puzzle re-enter
+        it safely). Returns the resulting state.
+        """
+        self._say("Puzzle solved! 🎉")
+        self.active = False
+        if self.puzzle_kind == "random":
+            # Restore the set to the standard start, then arrange a fresh puzzle
+            # (load_puzzle assumes the board begins from the standard position).
+            self._say("Loading another random puzzle…")
+            self.reset_board()
+            return self.load_puzzle("random")
+        # Daily puzzle: just re-home all the pieces.
+        self._say("Resetting the board.")
+        return self.reset_board()
 
     def _beep_and_restore(self, move):
         """Beep and physically slide the wrongly-moved piece back. Holds lock."""
@@ -559,6 +580,7 @@ class GameManager:
             self.board = chess.Board()
             self.grave = Graveyard()
             self.puzzle = None
+            self.puzzle_kind = "daily"
             self.solution = []
             self.solution_idx = 0
             self.mode = "local"
@@ -613,6 +635,7 @@ class GameManager:
                 "result": self._result_text(),
                 "captured": len(self.grave),
                 "puzzle": self.puzzle,
+                "puzzle_kind": self.puzzle_kind if self.mode == "puzzle" else None,
                 "puzzle_progress": (f"{self.solution_idx}/{len(self.solution)}"
                                     if self.mode == "puzzle" and self.solution else None),
                 "messages": list(self.messages)[-14:],
@@ -700,7 +723,8 @@ def api_flip():
 
 @app.route("/api/puzzle", methods=["POST"])
 def api_puzzle():
-    return jsonify(game.load_puzzle())
+    kind = (request.get_json(silent=True) or {}).get("kind", "daily")
+    return jsonify(game.load_puzzle(kind))
 
 
 @app.route("/api/move", methods=["POST"])
