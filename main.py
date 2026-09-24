@@ -15,6 +15,9 @@ so you can smoke-test it with `python main.py` before building the APK.
 
 from __future__ import annotations
 
+import sys
+import traceback
+
 # The port the webview bootstrap loads by default.
 PORT = 5000
 
@@ -40,18 +43,29 @@ def _request_android_permissions() -> None:
             perms.append(perm)
 
     if perms:
-        request_permissions(perms)
+        try:
+            request_permissions(perms)
+        except Exception:  # noqa: BLE001 - never let permissions crash startup
+            traceback.print_exc()
 
 
 def main() -> None:
-    _request_android_permissions()
+    # Any exception here (e.g. an import that touches a read-only path) would
+    # otherwise kill the whole app on launch with no trace. Log it to logcat so
+    # it can be diagnosed with `buildozer android logcat | grep -i python`.
+    try:
+        _request_android_permissions()
 
-    # Import here so the permission prompt shows before we touch Bluetooth.
-    from app import app as flask_app
+        # Import here so the permission prompt shows before we touch Bluetooth.
+        from app import app as flask_app
 
-    # host=0.0.0.0 so the in-app WebView (127.0.0.1) can reach it; no reloader
-    # (it would try to fork a second process, which p4a can't do).
-    flask_app.run(host="0.0.0.0", port=PORT, threaded=True, use_reloader=False)
+        # host=0.0.0.0 so the in-app WebView (127.0.0.1) can reach it; no reloader
+        # (it would try to fork a second process, which p4a can't do).
+        flask_app.run(host="0.0.0.0", port=PORT, threaded=True, use_reloader=False)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+        sys.stderr.flush()
+        raise
 
 
 if __name__ == "__main__":

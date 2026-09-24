@@ -60,6 +60,7 @@ import asyncio
 import logging
 import os
 import sys
+import tempfile
 
 try:
     from bleak import BleakClient, BleakScanner
@@ -76,17 +77,44 @@ except ImportError:  # pragma: no cover
 # signal (e.g. a second 'OK', an occupancy change, or a piece up/down event).
 #
 # Set the file with the SQUAREOFF_LOG env var; defaults to 'squareoff_ble.log'
-# in the current directory.
-BLE_LOG_PATH = os.environ.get("SQUAREOFF_LOG", "squareoff_ble.log")
+# in the first writable location we can find.
+#
+# IMPORTANT: on Android the process' current working directory is read-only, so
+# opening a log file there raises OSError. Because this module is imported when
+# the app starts (app.py -> squareoff), that exception would kill the whole app
+# on launch. We therefore pick a writable directory and, as a last resort,
+# disable file logging entirely rather than ever crashing.
+def _default_log_path() -> str:
+    override = os.environ.get("SQUAREOFF_LOG")
+    if override:
+        return override
+    candidates = (
+        os.environ.get("ANDROID_PRIVATE"),   # p4a: app's private, writable dir
+        os.environ.get("ANDROID_APP_PATH"),
+        os.environ.get("HOME"),
+        tempfile.gettempdir(),
+    )
+    for base in candidates:
+        if base and os.path.isdir(base) and os.access(base, os.W_OK):
+            return os.path.join(base, "squareoff_ble.log")
+    return "squareoff_ble.log"
+
+
+BLE_LOG_PATH = _default_log_path()
 
 ble_log = logging.getLogger("squareoff.ble")
 if not ble_log.handlers:
     ble_log.setLevel(logging.DEBUG)
-    _handler = logging.FileHandler(BLE_LOG_PATH)
-    _handler.setFormatter(
-        logging.Formatter("%(asctime)s.%(msecs)03d  %(message)s",
-                          datefmt="%H:%M:%S")
-    )
+    try:
+        _handler: logging.Handler = logging.FileHandler(BLE_LOG_PATH)
+        _handler.setFormatter(
+            logging.Formatter("%(asctime)s.%(msecs)03d  %(message)s",
+                              datefmt="%H:%M:%S")
+        )
+    except OSError:
+        # No writable location (e.g. locked-down Android sandbox): keep going
+        # without a log file instead of crashing the app on startup.
+        _handler = logging.NullHandler()
     ble_log.addHandler(_handler)
     ble_log.propagate = False
 

@@ -51,9 +51,15 @@ fullscreen = 0
 # INTERNET is needed so the WebView can talk to the local Flask server.
 android.permissions = INTERNET, BLUETOOTH, BLUETOOTH_ADMIN, BLUETOOTH_SCAN, BLUETOOTH_CONNECT, ACCESS_FINE_LOCATION, ACCESS_COARSE_LOCATION
 
-# Target API 33: the pinned p4a (v2024.01.21) ships NDK r25b, whose maximum
-# supported platform is android-33 (android-34 makes ndk-build abort).
-android.api = 33
+# targetSdkVersion (Java/manifest side). Newer Android versions pop up a
+# "this app was built for an older version of Android" warning when this is low,
+# so target a recent API. This is independent of the NDK platform used to build
+# the native CPython (that is driven by android.ndk_api / android.minapi below),
+# so it does not require a newer NDK than the pinned p4a ships.
+android.api = 34
+# NDK build platform: NDK r25b (shipped by the pinned p4a) supports up to
+# android-33 for *native* compilation, so keep the native target at 24 (min).
+android.ndk_api = 24
 android.minapi = 24
 # arm64-v8a only: virtually all Android phones since ~2019 are 64-bit, and the
 # 32-bit armeabi-v7a CPython build fails (Bionic lacks setgrent/getgrent for the
